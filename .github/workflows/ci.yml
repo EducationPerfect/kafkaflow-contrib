@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    
+    env:
+      CONFIGURATION: Release
+      TEST_RESULTS_DIR: ./output/test-results
+
+    steps:
+      - name: Get the sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine repository name
+        id: repo
+        run: |
+          REPOSITORY_NAME="$(echo ${{ github.repository }} | cut -d'/' -f2)"
+          echo "REPOSITORY_NAME=$REPOSITORY_NAME" >> $GITHUB_OUTPUT
+          echo "SONAR_PROJECT_KEY=EducationPerfect_$REPOSITORY_NAME" >> $GITHUB_OUTPUT
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v0
+        with:
+          versionSpec: '5.x'
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v0
+        with:
+          useConfigFile: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install tools
+        run: |
+          dotnet tool install --global dotnet-sonarscanner
+          dotnet tool install --global dotnet-coverage
+
+      - name: Restore dependencies
+        run: dotnet restore && dotnet tool restore
+
+      - name: Init Sonarscan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ ${{ github.event_name }} == pull_request ]]
+          then
+            echo "PR Build"
+
+            dotnet sonarscanner begin \
+              /k:"${{ steps.repo.outputs.SONAR_PROJECT_KEY }}" \
+              /o:"educationperfect" \
+              /d:sonar.token="$SONAR_TOKEN" \
+              /d:sonar.host.url="https://sonarcloud.io" \
+              /d:sonar.cs.vscoveragexml.reportsPaths="${{ env.TEST_RESULTS_DIR }}/*.xml" \
+              /d:sonar.cs.vstest.reportsPaths="${{ env.TEST_RESULTS_DIR }}/*.trx" \
+              /d:sonar.pullrequest.key="${{ github.event.pull_request.number }}" \
+              /d:sonar.pullrequest.branch="$HEAD_REF" \
+              /d:sonar.pullrequest.base="${{ github.base_ref }}" \
+
+          elif [[ ${{ github.ref }} == refs/heads/main ]]
+          then
+            echo "Main Build"
+
+            dotnet sonarscanner begin \
+              /k:"${{ steps.repo.outputs.SONAR_PROJECT_KEY }}" \
+              /v:${{ steps.gitversion.outputs.fullSemVer }} \
+              /o:"educationperfect" \
+              /d:sonar.token="$SONAR_TOKEN" \
+              /d:sonar.host.url="https://sonarcloud.io" \
+              /d:sonar.cs.vscoveragexml.reportsPaths="${{ env.TEST_RESULTS_DIR }}/*.xml" \
+              /d:sonar.cs.vstest.reportsPaths="${{ env.TEST_RESULTS_DIR }}/*.trx" \
+              /d:sonar.branch.name="main"
+          fi
+
+      - name: Run build
+        run: |
+          dotnet build --no-restore -c ${{ env.CONFIGURATION }} \
+            -p:AssemblyVersion=${{ steps.gitversion.outputs.assemblySemVer }} \
+            -p:ContinuousIntegrationBuild=True \
+            -p:DeterministicSourcePaths=True \
+            -p:RepositoryUrl=https://github.com/${{ github.repository }} \
+            -p:FileVersion=${{ steps.gitversion.outputs.assemblySemVer }} \
+            -p:InformationalVersion=${{ steps.gitversion.outputs.informationalVersion }}
+
+      - name: Setup test dependencies
+        run: docker compose up -d --wait
+
+      - name: Run tests
+        run: |
+          COMPONENT_NAME=$(realpath . | xargs basename)
+          dotnet-coverage collect "dotnet test --configuration ${{ env.CONFIGURATION }} --no-build --logger trx --results-directory ${{ env.TEST_RESULTS_DIR }}" -f xml -o "${{ env.TEST_RESULTS_DIR }}/$COMPONENT_NAME.xml"
+
+      - name: Teardown test dependencies
+        if: always()
+        run: docker compose down
+
+      - name: Build packages
+        run: |
+          dotnet pack --no-build -c ${{ env.CONFIGURATION }} \
+            -p:PackageVersion=${{ steps.gitversion.outputs.NuGetVersionV2 }} \
+            -o ./packages
+
+      - name: Publish Sonarscan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
+      - uses: mukunku/tag-exists-action@v1.6.0
+        id: checkTag
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag: ${{ steps.gitversion.outputs.fullSemVer }}
+
+      - name: Tag published version
+        uses: actions/github-script@v7
+        if: (github.ref == 'refs/heads/main') && (steps.checkTag.outputs.exists == 'false')
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/${{ steps.gitversion.outputs.fullSemVer }}',
+              sha: context.sha,
+              force: true
+            })
+
+      - name: Publish packages
+        if: github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        env: 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push ./packages/*.nupkg \
+          --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json \
+          --api-key $GITHUB_TOKEN \
+          --skip-duplicate

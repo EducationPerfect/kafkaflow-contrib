@@ -5,4 +5,17 @@
     <ItemGroup>
         <None Include="../../LICENSE.txt" Pack="true" PackagePath="" />
     </ItemGroup>
+
+    <!-- EP prefix avoids version clashes with upstream Contrib.KafkaFlow.* on nuget.org -->
+    <PropertyGroup>
+        <PackageId>EP.$(MSBuildProjectName)</PackageId>
+        <Company>Education Perfect</Company>
+        <Authors>Education Perfect</Authors>
+        <DebugSymbols>True</DebugSymbols>
+        <DebugType>portable</DebugType>
+        <RepositoryType>git</RepositoryType>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    </PropertyGroup>
 </Project>

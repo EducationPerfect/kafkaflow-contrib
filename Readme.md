@@ -1,5 +1,9 @@
 # KafkaFlow - extra libraries
 
+> **EP fork** of [AlexeyRaga/kafkaflow-contrib](https://github.com/AlexeyRaga/kafkaflow-contrib).
+> Packages publish to EP GitHub Packages as `EP.Contrib.KafkaFlow.*`; namespaces unchanged.
+> Upstream remains source of truth: send fixes upstream too.
+
 This project contains a set of libraries that contribute to [KafkaFlow](https://github.com/Farfetch/kafkaflow)
 ecosystem.
 
